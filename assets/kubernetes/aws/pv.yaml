@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-aws-rolesanywhere
+spec:
+  capacity:
+    storage: 50Mi
+  accessModes:
+    - ReadWriteOnce # EBS does not support ReadWriteMany
+  hostPath:
+    path: /var/shared/aws-rolesanywhere
+    type: DirectoryOrCreate

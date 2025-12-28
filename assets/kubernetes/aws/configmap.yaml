@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-rolesanywhere-cm
+  namespace: test-a
+  labels:
+    app: agent-rolesanywhere-cm
+data:
+  PROFILE_ARN: "arn:aws:rolesanywhere:us-east-2:999999993:profile/ae304557-bf5d-41f5-874b-98bac7048724"
+  TRUST_ANCHOR_ARN: "arn:aws:rolesanywhere:us-east-2:999999993:trust-anchor/35ff87c9-4fb9-4fa3-81e6-1c4fda3b6ddf"
+  ROLE_ARN: "arn:aws:iam::999999993:role/eliezer-role-anywhere-role"

@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: &app-name agent-rolesanywhere
+  namespace: test-a
+  labels:
+    app: *app-name
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: *app-name
+  template:
+    metadata:
+      labels:
+        app: *app-name
+    spec:
+      volumes:
+      - name: aws-certs
+        secret:
+          secretName: sc-agent-rolesanywhere
+      containers:
+      - name: *app-name
+        image: amazonlinux:2023
+        envFrom:
+        - configMapRef:
+            name: agent-rolesanywhere-cm
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "[$(date)] **** Starting Roles Anywhere helper version 0.1 ****"
+          mkdir -p /var/run/aws-rolesanywhere
+          cd /var/run/aws-rolesanywhere
+          
+          echo "[$(date)] Installing rolesanywhere.amazonaws.com ..."
+          curl https://rolesanywhere.amazonaws.com/releases/1.7.1/X86_64/Linux/Amzn2023/aws_signing_helper --output aws_signing_helper
+          chmod 755 aws_signing_helper          
+          yum install jq -y
+
+          echo "[$(date)] Installing awscli ..."
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          yum install unzip -y
+          unzip awscliv2.zip
+          yum install less -y
+          ./aws/install
+
+          echo "[$(date)] aws cli version: $(aws --version)"
+
+          echo "[$(date)] Generating credentials using the info below..."
+          echo "ROLE_ARN: $ROLE_ARN" 
+          echo "TRUST_ANCHOR_ARN: $TRUST_ANCHOR_ARN" 
+          echo "PROFILE_ARN: $PROFILE_ARN" 
+
+          while true; do
+            echo "[$(date)] Request credentials via aws_signing_helper credential-process and handle health.lock ..."
+            
+            rm health.lock
+
+            ./aws_signing_helper credential-process \
+              --certificate /etc/aws/certs/certificate.pem \
+              --private-key /etc/aws/certs/private_key.pem \
+              --trust-anchor-arn $TRUST_ANCHOR_ARN \
+              --profile-arn $PROFILE_ARN \
+              --role-arn $ROLE_ARN > ./sts-credential.json;
+
+            touch health.lock
+
+            echo "[$(date)] Credentials created successfully."
+
+            cat ./sts-credential.json | jq | grep AccessKeyId | sed 's/"AccessKeyId":/AWS_ACCESS_KEY_ID=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_ACCESS_KEY_ID
+            cat ./sts-credential.json | jq | grep SecretAccessKey | sed 's/"SecretAccessKey":/AWS_SECRET_ACCESS_KEY=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_SECRET_ACCESS_KEY
+            cat ./sts-credential.json | jq | grep SessionToken | sed 's/"SessionToken":/AWS_SESSION_TOKEN=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_SESSION_TOKEN
+
+            chmod 644 AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+            echo "[$(date)] Credentials parsed successfully."
+            echo "[$(date)] $(cat AWS_ACCESS_KEY_ID)"
+            echo "[$(date)] $(cat AWS_SECRET_ACCESS_KEY)"
+            echo "[$(date)] $(cat AWS_SESSION_TOKEN)"
+
+            # For demo purposes only - show that we can use the credentials to call AWS
+            echo "[$(date)] Testing the credentials by calling AWS Secrets Manager..."
+            
+            export AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId sts-credential.json)
+            export AWS_SECRET_ACCESS_KEY=$(jq -r .SecretAccessKey sts-credential.json)
+            export AWS_SESSION_TOKEN=$(jq -r .SessionToken sts-credential.json)
+
+            echo "[$(date)] $(aws sts get-caller-identity)"
+            echo "---------------------------------------------" 
+            aws s3 ls eliezerraj-9999999993-devops
+            echo "---------------------------------------------" 
+    
+            echo "[$(date)] Sleeping for 300"
+
+            sleep 300;
+          done
+        volumeMounts:
+        - name: aws-certs
+          mountPath: /etc/aws/certs
+          readOnly: true
+        livenessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - "test -f /var/run/aws-rolesanywhere/health.lock"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","sleep 5"]
+      terminationGracePeriodSeconds: 60
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels:
+                    app: *app-name
+              weight: 100

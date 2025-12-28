@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-pvc-test
+  namespace: test-a
+spec:
+  serviceAccountName: sa-go-onboarding
+  containers:
+  - name: test-container
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "[$(date)] Check the files..."
+      while true; do
+        echo "[$(date)] 1-) ls -l /var/shared/aws-rolesanywhere..."
+        ls -l /var/shared/aws-rolesanywhere;
+
+        echo "[$(date)] 2-) ls -l /var/run/aws-rolesanywhere..."
+        ls -l /var/run/aws-rolesanywhere;
+
+        sleep 30;
+      done
+    volumeMounts:
+    - name: aws-shared-creds
+      mountPath: /var/shared/aws-rolesanywhere
+    - name: aws-creds
+      mountPath: /var/run/aws-rolesanywhere
+      readOnly: true
+  volumes:
+  - name: aws-shared-creds
+    persistentVolumeClaim:
+      claimName: pvc-aws-rolesanywhere
+  - name: aws-creds
+    hostPath:   #stored on host so all pods can use it
+      path: /var/run/aws-rolesanywhere
+      type: DirectoryOrCreate

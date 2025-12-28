@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ds-agent-rolesanywhere
+  namespace: test-a
+  labels:
+    app: ds-agent-rolesanywhere
+spec:
+  selector:
+    matchLabels:
+      app: ds-agent-rolesanywhere
+  template:
+    metadata:
+      labels:
+        app: ds-agent-rolesanywhere
+    spec:
+      serviceAccountName: sa-go-onboarding
+      volumes:
+      - name: aws-certs
+        secret:
+          secretName: sc-agent-rolesanywhere
+      - name: aws-shared-creds
+        persistentVolumeClaim:
+          claimName: pvc-aws-rolesanywhere
+      - name: aws-creds
+        hostPath:   #stored on host so all pods can use it
+          path: /var/run/aws-rolesanywhere
+          type: DirectoryOrCreate
+      containers:
+      - name: rolesanywhere
+        image: amazonlinux:2023
+        envFrom:
+        - configMapRef:
+            name: agent-rolesanywhere-cm
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "[$(date)] Starting Roles Anywhere helper..."
+          mkdir -p /var/run/aws-rolesanywhere
+          
+          echo "Installing ..."
+          curl https://rolesanywhere.amazonaws.com/releases/1.7.1/X86_64/Linux/Amzn2023/aws_signing_helper --output aws_signing_helper
+          chmod 755 aws_signing_helper
+          yum install jq -y
+
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          yum install unzip -y
+          unzip awscliv2.zip
+          yum install less -y
+          ./aws/install
+
+          echo "[$(date)] aws cli version: $(aws --version)"
+
+          echo "[$(date)] Generating credentials using the info below..."
+          echo "ROLE_ARN: $ROLE_ARN" 
+          echo "TRUST_ANCHOR_ARN: $TRUST_ANCHOR_ARN" 
+          echo "PROFILE_ARN: $PROFILE_ARN" 
+
+          while true; do
+            ./aws_signing_helper credential-process \
+              --certificate /etc/aws/certs/certificate.pem \
+              --private-key /etc/aws/certs/private_key.pem \
+              --trust-anchor-arn $TRUST_ANCHOR_ARN \
+              --profile-arn $PROFILE_ARN \
+              --role-arn $ROLE_ARN > ./sts-credential.json;
+
+            echo "[$(date)] Credentials created successfully."
+
+            cat ./sts-credential.json | jq | grep AccessKeyId | sed 's/"AccessKeyId":/AWS_ACCESS_KEY_ID=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_ACCESS_KEY_ID
+            cat ./sts-credential.json | jq | grep SecretAccessKey | sed 's/"SecretAccessKey":/AWS_SECRET_ACCESS_KEY=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_SECRET_ACCESS_KEY
+            cat ./sts-credential.json | jq | grep SessionToken | sed 's/"SessionToken":/AWS_SESSION_TOKEN=/g' | sed 's/,$//' | sed 's/^[ \t]*//g' | sed 's/ //g' > AWS_SESSION_TOKEN
+
+            chmod 644 AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+            echo "[$(date)] Credentials parsed successfully."
+            echo "[$(date)] AWS_ACCESS_KEY_ID."
+            echo "[$(date)] AWS_SECRET_ACCESS_KEY."
+            echo "[$(date)] AWS_SESSION_TOKEN."
+
+            # Save to persistent volume
+            cp ./AWS_ACCESS_KEY_ID /var/shared/aws-rolesanywhere/AWS_ACCESS_KEY_ID 
+            cp ./AWS_SECRET_ACCESS_KEY /var/shared/aws-rolesanywhere/AWS_SECRET_ACCESS_KEY
+            cp ./AWS_SESSION_TOKEN /var/shared/aws-rolesanywhere/AWS_SESSION_TOKEN 
+    
+            echo "[$(date)] Credentials copied to shared volume successfully."
+
+            # For demo purposes only - show that we can use the credentials to call AWS
+            echo "[$(date)] Testing the credentials by calling AWS Secrets Manager..."  
+            SECRET=$(aws secretsmanager get-secret-value --secret-id arn:aws:secretsmanager:us-east-2:9999999975:secret:secret-arch-02-test-01-BEW4sc --version-stage AWSCURRENT --region us-east-2)
+            echo "[$(date)] Secret value: $SECRET"
+            
+            sleep 300;
+          done
+        volumeMounts:
+        - name: aws-certs
+          mountPath: /etc/aws/certs
+          readOnly: true
+        - name: aws-creds
+          mountPath: /var/run/aws-rolesanywhere
+          readOnly: false
+        - name: aws-shared-creds
+          mountPath: /var/shared/aws-rolesanywhere
+          readOnly: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels:
+                    app: ds-agent-rolesanywhere
+              weight: 100

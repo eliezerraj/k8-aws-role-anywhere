@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-aws-rolesanywhere
+  namespace: test-a
+spec:
+  accessModes:
+    - ReadWriteOnce # EBS does not support ReadWriteMany
+  resources:
+    requests:
+      storage: 50Mi
